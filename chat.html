@@ -49,6 +49,7 @@
       word-wrap: break-word;
       line-height: 1.6;
       animation: messageSlide .3s ease-out;
+      white-space: pre-wrap;
     }
     @keyframes messageSlide {
       from { opacity: 0; transform: translateY(10px); }
@@ -67,6 +68,13 @@
       border: 1px solid #e5e7eb;
       box-shadow: 0 2px 4px rgba(0,0,0,.05);
     }
+    .error-message {
+      background: #fee;
+      color: #c33;
+      align-self: flex-start;
+      border: 1px solid #fcc;
+      box-shadow: 0 2px 4px rgba(0,0,0,.05);
+    }
     .chat-input-container {
       padding: 20px;
       background: #fff;
@@ -83,6 +91,7 @@
       font-size: 16px;
       outline: none;
       transition: border-color .2s;
+      font-family: inherit;
     }
     .chat-input:focus {
       border-color: #4f46e5;
@@ -99,7 +108,7 @@
       transition: transform .2s, box-shadow .2s;
       min-width: 80px;
     }
-    .send-button:hover {
+    .send-button:hover:not(:disabled) {
       transform: translateY(-2px);
       box-shadow: 0 4px 12px rgba(79,70,229,.3);
     }
@@ -132,6 +141,13 @@
       0%, 80%, 100% { transform: scale(0); opacity: .5; }
       40% { transform: scale(1); opacity: 1; }
     }
+    .sources {
+      font-size: 0.85em;
+      color: #6b7280;
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid #e5e7eb;
+    }
   </style>
 </head>
 <body>
@@ -147,7 +163,7 @@
         type="text" 
         class="chat-input" 
         id="messageInput" 
-        placeholder="輸入訊息…" 
+        placeholder="輸入訊息..." 
         onkeypress="handleKeyPress(event)"
       />
       <button class="send-button" onclick="sendMessage()" id="sendButton">發送</button>
@@ -155,7 +171,7 @@
   </div>
 
   <script>
-    // 配置：Webhook URL（注意：是 sporttech-chatbot，帶連字號）
+    // 配置：請修改為您的 n8n webhook URL
     const WEBHOOK_URL = 'https://sushuching.zeabur.app/webhook/sporttech-chatbot';
     
     let isLoading = false;
@@ -192,44 +208,42 @@
           body: JSON.stringify({
             question: message,
             timestamp: new Date().toISOString()
-          }),
-          mode: 'cors'
+          })
         });
 
         console.log('📊 回應狀態:', response.status);
-        console.log('📋 回應類型:', response.headers.get('Content-Type'));
-
+        
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
 
-        // 先取得文字，檢查是否為空
         const text = await response.text();
-        console.log('📄 原始回應文字:', text);
+        console.log('📄 原始回應:', text);
 
-        if (!text) {
+        if (!text || text.trim() === '') {
           throw new Error('伺服器返回空白回應');
         }
 
-        // 嘗試解析 JSON
         let result;
         try {
           result = JSON.parse(text);
           console.log('✅ 成功解析 JSON:', result);
         } catch (parseError) {
           console.error('❌ JSON 解析失敗:', parseError);
-          console.error('原始內容:', text);
           throw new Error('伺服器返回的內容不是有效的 JSON 格式');
         }
         
         removeLoadingMessage(loadingMessageId);
 
-        // 多格式容錯：answer / reply / output / text / message
+        // 提取回答內容
         let botMessage = '';
+        let sources = '';
+        
         if (typeof result === 'string') {
           botMessage = result;
         } else if (result.answer) {
           botMessage = result.answer;
+          sources = result.sources || '';
         } else if (result.reply) {
           botMessage = result.reply;
         } else if (result.output) {
@@ -240,35 +254,43 @@
           botMessage = result.message;
         } else {
           console.error('❌ 未知的回應格式:', result);
-          botMessage = '抱歉，收到了回應但格式不正確。\n\n收到的內容：' + JSON.stringify(result);
+          botMessage = '抱歉，收到了回應但格式不正確。';
         }
 
-        addMessage(botMessage || '抱歉，我沒有收到有效的回應。', 'bot');
+        addMessage(botMessage || '抱歉，我沒有收到有效的回應。', 'bot', sources);
 
       } catch (err) {
         console.error('❌ 錯誤詳情:', err);
         removeLoadingMessage(loadingMessageId);
         
-        let errorMsg = '發生錯誤：\n\n';
+        let errorMsg = '';
         if (err.name === 'TypeError' && err.message.includes('fetch')) {
-          errorMsg += '無法連接到伺服器。\n\n可能原因：\n1. n8n 工作流程未啟動（請確認是 Active 狀態）\n2. 網路連線問題\n3. CORS 設定問題';
+          errorMsg = '❌ 無法連接到伺服器\n\n可能原因：\n1. n8n 工作流程未啟動（請確認是 Active 狀態）\n2. Webhook URL 不正確\n3. 網路連線問題\n4. CORS 設定問題';
         } else if (err.message.includes('HTTP')) {
-          errorMsg += err.message + '\n\n請確認：\n1. n8n 工作流程已啟動（Active）\n2. Webhook URL 正確';
+          errorMsg = `❌ 伺服器錯誤：${err.message}\n\n請確認：\n1. n8n 工作流程已啟動（Active）\n2. Webhook URL 正確\n3. Supabase 資料庫已配置`;
+        } else if (err.message.includes('空白')) {
+          errorMsg = '❌ 伺服器返回空白回應\n\n請檢查：\n1. n8n 工作流程的「Respond to Webhook」節點是否正確配置\n2. 是否有錯誤日誌';
         } else {
-          errorMsg += err.message;
+          errorMsg = `❌ 發生錯誤：${err.message}`;
         }
         
-        addMessage(errorMsg, 'bot');
+        addMessage(errorMsg, 'error');
       } finally {
         setLoading(false);
       }
     }
 
-    function addMessage(text, sender) {
+    function addMessage(text, sender, sources = '') {
       const box = document.getElementById('chatMessages');
       const div = document.createElement('div');
       div.className = `message ${sender}-message`;
-      div.innerHTML = String(text).replace(/\n/g, '<br>');
+      
+      let content = String(text);
+      if (sources) {
+        content += `\n\n📚 參考來源：\n${sources}`;
+      }
+      
+      div.textContent = content;
       box.appendChild(div);
       box.scrollTop = box.scrollHeight;
     }
@@ -296,7 +318,7 @@
       const inp = document.getElementById('messageInput');
       btn.disabled = loading;
       inp.disabled = loading;
-      btn.textContent = loading ? '發送中…' : '發送';
+      btn.textContent = loading ? '發送中...' : '發送';
     }
   </script>
 </body>
